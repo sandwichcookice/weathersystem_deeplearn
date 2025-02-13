@@ -1,0 +1,254 @@
+{
+    "input_ids": [
+      "Temperature",
+      "DewPoint",
+      "ApparentTemperature",
+      "RelativeHumidity",
+      "WindSpeed",
+      "ProbabilityOfPrecipitation",
+      "ComfortIndex"
+    ],
+    "input_specs": {
+      "Temperature": {
+        "min": 0,
+        "max": 50
+      },
+      "DewPoint": {
+        "min": 0,
+        "max": 50
+      },
+      "ApparentTemperature": {
+        "min": 0,
+        "max": 50
+      },
+      "RelativeHumidity": {
+        "min": 0,
+        "max": 100
+      },
+      "WindSpeed": {
+        "min": 0,
+        "max": 20
+      },
+      "ProbabilityOfPrecipitation": {
+        "min": 0,
+        "max": 100
+      },
+      "ComfortIndex": {
+        "min": 0,
+        "max": 30
+      }
+    },
+    "output_ids": [
+      "wearing_warm_clothes",
+      "carry_umbrella",
+      "damp_cold",
+      "damp_hot",
+      "dry_cold",
+      "dry_hot",
+      "wind_cold",
+      "wind_hot",
+      "outdoor_recommended",
+      "increase_water_intake",
+      "ground_slippery_warning"
+    ],
+    "sequence_length": 24,
+    "model_details": {
+      "architecture": "LSTM_Attention_DDQN",
+      "input_layer": {
+        "input_dim": 7,
+        "description": "根據 input_ids 的長度，此處為 7"
+      },
+      "lstm_layer": {
+        "lstm_hidden_dim": 64,
+        "lstm_layers": 1,
+        "sequence_length": 24,
+        "description": "處理一天內 24 個時間點的數據"
+      },
+      "attention_layer": {
+        "method": "multiplicative",
+        "description": "採用乘法將先驗時間權重與 LSTM 輸出結合"
+      },
+      "shared_layers": [
+        {
+          "name": "fc1",
+          "output_dim": 128,
+          "activation": "ReLU"
+        },
+        {
+          "name": "fc2",
+          "output_dim": 128,
+          "activation": "ReLU"
+        }
+      ],
+      "advantage_branch": {
+        "hidden_layer": {
+          "name": "adv_hidden",
+          "output_dim": 128,
+          "activation": "ReLU"
+        },
+        "output_layer": {
+          "name": "advantage_stream",
+          "output_dim": 22,
+          "activation": "None",
+          "description": "等於 2 * output_ids 的長度，這裡為 2 x 11 = 22"
+        }
+      },
+      "value_branch": {
+        "hidden_layer": {
+          "name": "val_hidden",
+          "output_dim": 128,
+          "activation": "ReLU"
+        },
+        "output_layer": {
+          "name": "value_stream",
+          "output_dim": 11,
+          "activation": "None"
+        }
+      },
+      "combination_method": "Q = V + (A - mean(A, axis=2))"
+    },
+    "training": {
+      "learning_rate": 0.001,
+      "batch_size": 32,
+      "num_epochs": 100,
+      "optimizer": "Adam"
+    },
+    "rules": [
+      {
+        "condition": "actual_rain == True and carry_umbrella == False",
+        "reward": "-10"
+      },
+      {
+        "condition": "actual_rain == True and carry_umbrella == True",
+        "reward": "10"
+      },
+      {
+        "condition": "actual_rain == False and carry_umbrella == True",
+        "reward": "-5"
+      },
+      {
+        "condition": "actual_rain == False and carry_umbrella == False",
+        "reward": "5"
+      },
+      {
+        "condition": "apparent_temp < 13 and wearing_warm_clothes == False",
+        "reward": "-10"
+      },
+      {
+        "condition": "apparent_temp < 13 and wearing_warm_clothes == True",
+        "reward": "10"
+      },
+      {
+        "condition": "apparent_temp > 27 and wearing_warm_clothes == True",
+        "reward": "-10"
+      },
+      {
+        "condition": "apparent_temp > 27 and wearing_warm_clothes == False",
+        "reward": "10"
+      },
+      {
+        "condition": "actual_temp < 13 and relative_humidity > 70 and damp_cold == True",
+        "reward": "10"
+      },
+      {
+        "condition": "actual_temp < 13 and relative_humidity > 70 and damp_cold == False",
+        "reward": "-10"
+      },
+      {
+        "condition": "actual_temp < 13 and relative_humidity < 50 and dry_cold == True",
+        "reward": "10"
+      },
+      {
+        "condition": "actual_temp < 13 and relative_humidity < 50 and dry_cold == False",
+        "reward": "-10"
+      },
+      {
+        "condition": "actual_temp > 27 and relative_humidity > 70 and damp_hot == True",
+        "reward": "10"
+      },
+      {
+        "condition": "actual_temp > 27 and relative_humidity > 70 and damp_hot == False",
+        "reward": "-10"
+      },
+      {
+        "condition": "actual_temp > 27 and relative_humidity < 50 and dry_hot == True",
+        "reward": "10"
+      },
+      {
+        "condition": "actual_temp > 27 and relative_humidity < 50 and dry_hot == False",
+        "reward": "-10"
+      },
+      {
+        "condition": "wind_speed > 7 and apparent_temp < 13 and wind_cold == True",
+        "reward": "10"
+      },
+      {
+        "condition": "wind_speed > 7 and apparent_temp < 13 and wind_cold == False",
+        "reward": "-10"
+      },
+      {
+        "condition": "wind_speed > 7 and apparent_temp > 27 and wind_hot == True",
+        "reward": "10"
+      },
+      {
+        "condition": "wind_speed > 7 and apparent_temp > 27 and wind_hot == False",
+        "reward": "-10"
+      },
+      {
+        "condition": "comfort_index >= 15 and outdoor_recommended == True",
+        "reward": "10"
+      },
+      {
+        "condition": "comfort_index >= 15 and outdoor_recommended == False",
+        "reward": "-10"
+      },
+      {
+        "condition": "comfort_index < 15 and outdoor_recommended == False",
+        "reward": "10"
+      },
+      {
+        "condition": "comfort_index < 15 and outdoor_recommended == True",
+        "reward": "-10"
+      },
+      {
+        "condition": "apparent_temp > 27 and increase_water_intake == True",
+        "reward": "10"
+      },
+      {
+        "condition": "apparent_temp > 27 and increase_water_intake == False",
+        "reward": "-10"
+      },
+      {
+        "condition": "apparent_temp < 13 and dew_point < 0 and increase_water_intake == True",
+        "reward": "10"
+      },
+      {
+        "condition": "apparent_temp < 13 and dew_point < 0 and increase_water_intake == False",
+        "reward": "-10"
+      },
+      {
+        "condition": "not(apparent_temp > 27 or (apparent_temp < 13 and dew_point < 0)) and increase_water_intake == False",
+        "reward": "10"
+      },
+      {
+        "condition": "not(apparent_temp > 27 or (apparent_temp < 13 and dew_point < 0)) and increase_water_intake == True",
+        "reward": "-5"
+      },
+      {
+        "condition": "(actual_temp - dew_point) < 2 and actual_temp < 13 and ground_slippery_warning == True",
+        "reward": "10"
+      },
+      {
+        "condition": "(actual_temp - dew_point) < 2 and actual_temp < 13 and ground_slippery_warning == False",
+        "reward": "-10"
+      },
+      {
+        "condition": "not((actual_temp - dew_point) < 2 and actual_temp < 13) and ground_slippery_warning == False",
+        "reward": "10"
+      },
+      {
+        "condition": "not((actual_temp - dew_point) < 2 and actual_temp < 13) and ground_slippery_warning == True",
+        "reward": "-5"
+      }
+    ]
+  }
