@@ -10,7 +10,8 @@ import gym
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from collections import deque
+from torch.utils.tensorboard import SummaryWriter  # 新增
+from tqdm import tqdm
 
 #########################################
 # 生成時間權重 (來自舊訓練腳本)
@@ -246,11 +247,18 @@ def evaluate_reward(rules, real_record, action):
 # 主程序 – 手動實作 DDQN 演算法的訓練流程
 #########################################
 if __name__ == "__main__":
+    
+    # 設定裝置：自動選擇 CUDA 或 CPU
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    # 建立 TensorBoard 寫入器
+    writer = SummaryWriter(log_dir="./logs")
+    
     # 建立環境
     env = WeatherEnv()
     # 建立主網路與目標網路
-    model = WeatherDDQNModel()
-    target_model = WeatherDDQNModel()
+    model = WeatherDDQNModel().to(device)
+    target_model = WeatherDDQNModel().to(device)
     target_model.load_state_dict(model.state_dict())
     target_model.eval()
 
@@ -261,66 +269,55 @@ if __name__ == "__main__":
     target_update_freq = 1000  # 每 1000 個步驟更新目標網路
     episode_rewards = []
 
-    # 訓練迴圈（以 episode 為單位，每個 episode 為一個 step）
-    for episode in range(num_episodes):
+    # 使用 tqdm 進度條包裹外層訓練迴圈
+    for episode in tqdm(range(num_episodes), desc="Training Episodes"):
         obs = env.reset()
         done = False
         episode_reward = 0
 
-        # 由於每個 episode 只有一個 step（環境設計），故只執行一次
         total_steps += 1
 
-        # 計算當前 epsilon（線性衰減）
         epsilon = max(final_epsilon, initial_epsilon - (initial_epsilon - final_epsilon) * (total_steps / epsilon_decay_steps))
-        # epsilon-greedy 選擇動作
         if random.random() < epsilon:
-            # 隨機產生 11 維二元動作
             action = np.random.randint(0, 2, size=(11,))
         else:
             model.eval()
             with torch.no_grad():
-                state_weather = torch.tensor(obs["weather"], dtype=torch.float32).unsqueeze(0)  # (1, 24, 7)
-                state_time = torch.tensor(obs["time_weight"], dtype=torch.float32).unsqueeze(0)    # (1, 24)
-                q_vals = model(state_weather, state_time)  # (1, 11, 2)
-                q_vals = q_vals.squeeze(0)  # (11, 2)
+                state_weather = torch.tensor(obs["weather"], dtype=torch.float32, device=device).unsqueeze(0)
+                state_time = torch.tensor(obs["time_weight"], dtype=torch.float32, device=device).unsqueeze(0)
+                q_vals = model(state_weather, state_time)
+                q_vals = q_vals.squeeze(0)
                 action = q_vals.argmax(dim=1).cpu().numpy()
-        # 執行動作
         next_obs, reward, done, info = env.step(action)
         episode_reward += reward
 
-        # 存入 replay buffer
         replay_buffer.push(obs, action, reward, next_obs, done)
         obs = next_obs
 
-        # 當 replay buffer 足夠大後開始訓練
         if len(replay_buffer) >= learning_starts:
-            # 隨機抽取一個 mini-batch
+            model.train()
             states, actions, rewards, next_states, dones = replay_buffer.sample(batch_size)
 
-            # 將 states 中的 "weather" 與 "time_weight" 分離，並轉換為 tensor
-            states_weather = torch.tensor(np.array([s["weather"] for s in states]), dtype=torch.float32)
-            states_time = torch.tensor(np.array([s["time_weight"] for s in states]), dtype=torch.float32)
-            next_states_weather = torch.tensor(np.array([s["weather"] for s in next_states]), dtype=torch.float32)
-            next_states_time = torch.tensor(np.array([s["time_weight"] for s in next_states]), dtype=torch.float32)
-            actions_tensor = torch.tensor(np.array(actions), dtype=torch.long)  # shape (batch, 11)
-            rewards_tensor = torch.tensor(np.array(rewards), dtype=torch.float32)  # shape (batch,)
-            dones_tensor = torch.tensor(np.array(dones), dtype=torch.float32)  # shape (batch,)
+            states_weather = torch.tensor(np.array([s["weather"] for s in states]), dtype=torch.float32, device=device)
+            states_time = torch.tensor(np.array([s["time_weight"] for s in states]), dtype=torch.float32, device=device)
+            next_states_weather = torch.tensor(np.array([s["weather"] for s in next_states]), dtype=torch.float32, device=device)
+            next_states_time = torch.tensor(np.array([s["time_weight"] for s in next_states]), dtype=torch.float32, device=device)
+            actions_tensor = torch.tensor(np.array(actions), dtype=torch.long, device=device)
+            rewards_tensor = torch.tensor(np.array(rewards), dtype=torch.float32, device=device)
+            dones_tensor = torch.tensor(np.array(dones), dtype=torch.float32, device=device)
 
-            # 計算主網路的 Q 值
-            q_vals = model(states_weather, states_time)  # (batch, 11, 2)
-            # 對每個決策取 argmax 後使用 torch.gather
-            actions_tensor_expanded = actions_tensor.unsqueeze(2)  # (batch, 11, 1)
-            chosen_q_vals = torch.gather(q_vals, 2, actions_tensor_expanded).squeeze(2)  # (batch, 11)
-            current_q = chosen_q_vals.mean(dim=1)  # 聚合 11 個決策的 Q 值 (batch,)
+            q_vals = model(states_weather, states_time)
+            actions_tensor_expanded = actions_tensor.unsqueeze(2)
+            chosen_q_vals = torch.gather(q_vals, 2, actions_tensor_expanded).squeeze(2)
+            current_q = chosen_q_vals.mean(dim=1)
 
-            # Double DQN：先用主網路選出 next_state 的最佳動作，再用目標網路評估該動作的 Q 值
             with torch.no_grad():
-                next_q_vals_main = model(next_states_weather, next_states_time)  # (batch, 11, 2)
-                next_actions = next_q_vals_main.argmax(dim=2)  # (batch, 11)
-                next_actions_expanded = next_actions.unsqueeze(2)  # (batch, 11, 1)
-                next_q_vals_target = target_model(next_states_weather, next_states_time)  # (batch, 11, 2)
-                next_chosen_q_vals = torch.gather(next_q_vals_target, 2, next_actions_expanded).squeeze(2)  # (batch, 11)
-                next_q = next_chosen_q_vals.mean(dim=1)  # (batch,)
+                next_q_vals_main = model(next_states_weather, next_states_time)
+                next_actions = next_q_vals_main.argmax(dim=2)
+                next_actions_expanded = next_actions.unsqueeze(2)
+                next_q_vals_target = target_model(next_states_weather, next_states_time)
+                next_chosen_q_vals = torch.gather(next_q_vals_target, 2, next_actions_expanded).squeeze(2)
+                next_q = next_chosen_q_vals.mean(dim=1)
                 target_q = rewards_tensor + gamma * next_q * (1 - dones_tensor)
 
             loss = F.mse_loss(current_q, target_q)
@@ -331,17 +328,17 @@ if __name__ == "__main__":
 
             if total_steps % 100 == 0:
                 print(f"Step: {total_steps}, Loss: {loss.item():.4f}")
+                writer.add_scalar("Loss/train", loss.item(), total_steps)  # 記錄 loss
 
-            # 定期更新目標網路
             if total_steps % target_update_freq == 0:
                 target_model.load_state_dict(model.state_dict())
 
         episode_rewards.append(episode_reward)
-        print(f"Episode: {episode+1}, Reward: {episode_reward:.2f}, Epsilon: {epsilon:.3f}")
+        writer.add_scalar("Reward/episode", episode_reward, episode+1)  # 記錄 reward
 
-        # 每 10 個 episode 存檔一次
         if (episode + 1) % 1000 == 0:
             os.makedirs("./model/log", exist_ok=True)
             torch.save(model.state_dict(), f"./model/log/model_checkpoint_episode_{episode+1}.pth")
 
+    writer.close()  # 結束時關閉 writer
     print("Training completed.")

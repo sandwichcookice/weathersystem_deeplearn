@@ -85,7 +85,8 @@ class WeatherDDQNModel(nn.Module):
 # -------------------------------
 def generate_time_weights(batch_size, seq_len, device="cpu", low=0.5, high=1.5):
     import random
-    pattern = random.choice(["U", "increasing", "decreasing"])
+    pattern = random.choice(["increasing"])
+    #pattern = random.choice(["U", "increasing", "decreasing"])
     print(f"Selected time weight pattern: {pattern}")
     if pattern == "U":
         half = seq_len // 2
@@ -177,11 +178,12 @@ def convert_input_to_real_record(data):
 # 主程式：推理與驗證
 # -------------------------------
 def main():
-    parser = argparse.ArgumentParser(description="Inference & Validation script for WeatherDDQNModel (outputs T/F decisions and penalty score)")
+    parser = argparse.ArgumentParser(
+        description="Inference & Validation script for WeatherDDQNModel (outputs T/F decisions)"
+    )
     parser.add_argument("--config", type=str, default="model/config.json", help="Path to config file")
     parser.add_argument("--model_path", type=str, default="model/log/leatest.pth", help="Path to model checkpoint")
-    parser.add_argument("--input_file", type=str, default="testinput.json", help="Path to test input JSON")
-    parser.add_argument("--real_file", type=str, default="testinput.json", help="Path to real record JSON for validation (should be array format)")
+    parser.add_argument("--input_file", type=str, default="data/testinput.json", help="Path to test input JSON")
     args = parser.parse_args()
 
     # 載入配置（若存在）
@@ -206,13 +208,20 @@ def main():
     model.load_state_dict(state_dict)
     model.eval()
 
-    # 載入推理資料（期望 JSON 文件內容為 [seq_len, input_dim]）
+    # 載入推理資料：若為 dict 格式，則從 "predicted_records" 與 "input_ids" 轉出資料矩陣
     try:
         with open(args.input_file, "r", encoding="utf-8") as f:
             sample_data = json.load(f)
-        sample = np.array(sample_data, dtype=np.float32)
+        if isinstance(sample_data, dict) and "predicted_records" in sample_data:
+            file_input_ids = sample_data.get("input_ids", input_ids)
+            records = sample_data["predicted_records"]
+            sample = [[float(record.get(col, 0)) for col in file_input_ids] for record in records]
+        elif isinstance(sample_data, list):
+            sample = sample_data
+        else:
+            raise ValueError("推理輸入資料格式不正確！")
     except Exception as e:
-        print("無法載入推理輸入文件，使用預設全 0 輸入。")
+        print("無法載入推理輸入文件，使用預設全 0 輸入。", e)
         sample = np.zeros((seq_len, input_dim), dtype=np.float32)
 
     sample_tensor = torch.tensor(sample, dtype=torch.float32, device=device).unsqueeze(0)  # (1, seq_len, input_dim)
@@ -232,45 +241,6 @@ def main():
     print(q_values.cpu().numpy())
     print("模型輸出的 T/F 決策:")
     print(actions_bool)
-
-    # 處理真實資料（real_file）：由於實際上與 input_file 同樣都是陣列，
-    # 則轉換為字典（取平均值等）以便與規則進行評估
-    try:
-        with open(args.real_file, "r", encoding="utf-8") as f:
-            real_data = json.load(f)
-        if isinstance(real_data, list):
-            real_record = convert_input_to_real_record(real_data)
-            print("已將 real_file（列表格式）轉換為字典。")
-        elif isinstance(real_data, dict):
-            real_record = real_data
-        else:
-            print("real_file 格式不正確，使用預設 dummy 資料。")
-            real_record = {
-                "actual_rain": True,
-                "carry_umbrella": False,
-                "apparent_temp": 12,
-                "actual_temp": 12,
-                "relative_humidity": 80,
-                "dew_point": 5,
-                "wind_speed": 8,
-                "comfort_index": 10
-            }
-    except Exception as e:
-        print("無法載入真實資料文件，使用預設 dummy 資料。")
-        real_record = {
-            "actual_rain": True,
-            "carry_umbrella": False,
-            "apparent_temp": 12,
-            "actual_temp": 12,
-            "relative_humidity": 80,
-            "dew_point": 5,
-            "wind_speed": 8,
-            "comfort_index": 10
-        }
-
-    penalty_score = evaluate_penalty(config.get("rules", []), real_record, actions_bool, output_ids)
-    print("驗證結果 - 總扣分分數:")
-    print(penalty_score)
 
 if __name__ == "__main__":
     main()

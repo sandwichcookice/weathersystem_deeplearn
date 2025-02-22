@@ -88,10 +88,10 @@
   },
   "training": {
     "learning_rate": 0.001,
-    "batch_size": 64,
+    "batch_size": 258,
     "num_epochs": 10000,
     "gamma": 0.99,
-    "learning_starts": 1000,
+    "learning_starts": 2000,
     "replay_buffer_size": 50000,
     "exploration_config": {
       "epsilon_timesteps": 10000,
@@ -99,7 +99,7 @@
     },
     "optimizer": "Adam"
   },
-  "rules": [
+"rules": [
     {
       "condition": "actual_rain == True and carry_umbrella == False",
       "reward": "-10"
@@ -149,6 +149,14 @@
       "reward": "-10"
     },
     {
+      "condition": "actual_temp < 13 and relative_humidity >= 50 and relative_humidity <= 70 and damp_cold == False and dry_cold == False",
+      "reward": "5"
+    },
+    {
+      "condition": "actual_temp < 13 and relative_humidity >= 50 and relative_humidity <= 70 and (damp_cold == True or dry_cold == True)",
+      "reward": "-5"
+    },
+    {
       "condition": "actual_temp > 27 and relative_humidity > 70 and damp_hot == True",
       "reward": "10"
     },
@@ -165,20 +173,44 @@
       "reward": "-10"
     },
     {
-      "condition": "wind_speed > 7 and apparent_temp < 13 and wind_cold == True",
+      "condition": "actual_temp > 27 and relative_humidity >= 50 and relative_humidity <= 70 and damp_hot == False and dry_hot == False",
+      "reward": "5"
+    },
+    {
+      "condition": "actual_temp > 27 and relative_humidity >= 50 and relative_humidity <= 70 and (damp_hot == True or dry_hot == True)",
+      "reward": "-5"
+    },
+    {
+      "condition": "apparent_temp < 13 and wind_speed > 7 and wind_cold == True",
       "reward": "10"
     },
     {
-      "condition": "wind_speed > 7 and apparent_temp < 13 and wind_cold == False",
+      "condition": "apparent_temp < 13 and wind_speed > 7 and wind_cold == False",
       "reward": "-10"
     },
     {
-      "condition": "wind_speed > 7 and apparent_temp > 27 and wind_hot == True",
+      "condition": "apparent_temp < 13 and wind_speed <= 7 and wind_cold == False",
+      "reward": "5"
+    },
+    {
+      "condition": "apparent_temp < 13 and wind_speed <= 7 and wind_cold == True",
+      "reward": "-5"
+    },
+    {
+      "condition": "apparent_temp > 27 and wind_speed > 7 and wind_hot == True",
       "reward": "10"
     },
     {
-      "condition": "wind_speed > 7 and apparent_temp > 27 and wind_hot == False",
+      "condition": "apparent_temp > 27 and wind_speed > 7 and wind_hot == False",
       "reward": "-10"
+    },
+    {
+      "condition": "apparent_temp > 27 and wind_speed <= 7 and wind_hot == False",
+      "reward": "5"
+    },
+    {
+      "condition": "apparent_temp > 27 and wind_speed <= 7 and wind_hot == True",
+      "reward": "-5"
     },
     {
       "condition": "comfort_index >= 15 and outdoor_recommended == True",
