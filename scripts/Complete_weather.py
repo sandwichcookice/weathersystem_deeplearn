@@ -2,107 +2,66 @@ import json
 import math
 import numpy as np
 import pandas as pd
+import torch
 from datetime import datetime
 
-# 讀取原始 JSON 資料（請確保檔案路徑正確）
+#############################################
+# 1. 讀取原始資料（假設資料為 JSON 陣列，每筆為一個字典）
+#############################################
 def load_raw_data(filepath="data/Data.json"):
     with open(filepath, "r", encoding="utf-8") as f:
         raw = json.load(f)
-    # 假設資料存放在 raw["records"]["Locations"][0]["Location"][...]
-    # 根據您提供的結構進行調整，這裡以第一個 Location 為例：
-    location_data = raw["records"]["Locations"][0]["Location"]
-    # 將每筆資料展開，每筆資料可能包含多個 WeatherElement
-    # 這裡我們假設從中提取下列欄位：
-    # "air_temperature", "relative_humidity", "precipitation", "wind_speed", "air_pressure", "date_time"
-    records = []
-    for loc in location_data:
-        # loc 為一個字典，內含 "WeatherElement" 列表
-        # 我們遍歷 WeatherElement，根據 ElementName 選取需要的值
-        # 這裡以簡化方式假設 Temperature 來自 ElementName=="溫度"的第一個 ElementValue，RH來自 "RelativeHumidity"等
-        # 請根據實際情況調整：
-        for we in loc.get("WeatherElement", []):
-            ename = we.get("ElementName", "")
-            for t in we.get("Time", []):
-                dt = t.get("DataTime") or t.get("StartTime")
-                # 取第一個 ElementValue
-                val_dict = t.get("ElementValue", [{}])[0]
-                record = {"date_time": dt}
-                if ename == "溫度":
-                    record["Temperature"] = float(val_dict.get("Temperature", -99))
-                elif ename == "相對濕度":
-                    record["RelativeHumidity"] = float(val_dict.get("RelativeHumidity", -99))
-                elif ename == "降水量":  # 假設降水量
-                    record["Precipitation"] = float(val_dict.get("Precipitation", -99))
-                elif ename == "風速":
-                    record["WindSpeed"] = float(val_dict.get("WindSpeed", -99))
-                elif ename == "氣壓":
-                    record["AirPressure"] = float(val_dict.get("AirPressure", -99))
-                # 可依需要添加更多欄位
-                records.append(record)
-    return records
+    # raw 直接是一個列表
+    return raw
 
-# 缺失值處理：對於 -99，使用前後有效值的線性插值
-def clean_data(records, field_names):
-    # 轉換成 DataFrame（依照 date_time 排序）
-    df = pd.DataFrame(records)
-    df["date_time"] = pd.to_datetime(df["date_time"])
-    df.sort_values("date_time", inplace=True)
-    # 對指定欄位，將 -99 視為缺失值
-    for field in field_names:
+#############################################
+# 2. 缺失值處理：對於 -99，採用線性插值補全（包括連續缺失情況）
+#############################################
+def clean_data(df, fields):
+    for field in fields:
         df[field] = df[field].replace(-99, np.nan)
-        # 使用線性插值填補缺失值
         df[field] = df[field].interpolate(method="linear")
-        # 如首尾仍有缺失，用前/後值填充
         df[field] = df[field].fillna(method="ffill").fillna(method="bfill")
     return df
 
-# 計算露點溫度（Magnus公式）
+#############################################
+# 3. 衍生特徵計算
+#############################################
 def compute_dew_point(T, RH):
-    # T: 氣溫 (°C), RH: 相對濕度 (%)
-    # 防止 RH==0
     RH = max(RH, 1)
-    numerator = 243.04 * (np.log(RH/100.0) + (17.625 * T)/(243.04+T))
-    denominator = 17.625 - np.log(RH/100.0) - (17.625 * T)/(243.04+T)
+    numerator = 243.04 * (math.log(RH/100.0) + (17.625 * T)/(243.04 + T))
+    denominator = 17.625 - math.log(RH/100.0) - (17.625 * T)/(243.04 + T)
     return numerator / denominator
 
-# 計算體感溫度
 def compute_apparent_temperature(T, V, RH):
-    # T: 氣溫 (°C), V: 風速 (m/s), RH: 相對濕度 (%)
-    e = (RH/100.0) * 6.105 * math.exp((17.27 * T)/(237.7+T))
+    e = (RH/100.0) * 6.105 * math.exp((17.27 * T)/(237.7 + T))
     return 1.04 * T + 0.2 * e - 0.65 * V - 2.7
 
-# 降雨機率（根據降水量，簡單映射）
 def compute_prob_precipitation(precip):
-    # precip: 降水量 (mm)
     if precip < 0.1:
         return 10.0
     else:
         return 10.0 + 70.0 * min(1.0, precip/0.5)
 
-# 舒適度指數（THI）公式
 def compute_comfort_index(T, Td):
-    # T: 氣溫, Td: 露點溫度
-    return T - 0.55 * (1 - math.exp((17.269 * Td)/(Td+237.3) - (17.269 * T)/(T+237.3))) * (T - 14)
+    diff_exp = math.exp((17.269 * Td)/(Td+237.3) - (17.269 * T)/(T+237.3))
+    return T - 0.55 * (1 - diff_exp) * (T - 14)
 
-# 將原始資料轉換為模型輸入格式
+#############################################
+# 4. 將原始資料轉換為我們需要的特徵格式（保留字典形式）
+#############################################
 def transform_data(df):
-    # 假設我們需要的欄位：Temperature, RelativeHumidity, Precipitation, WindSpeed
-    # 由此計算：DewPoint, ApparentTemperature, ComfortIndex, ProbabilityOfPrecipitation
     transformed = []
-    for idx, row in df.iterrows():
-        T = row["Temperature"]
-        RH = row["RelativeHumidity"]
-        precip = row.get("Precipitation", 0)  # 若缺失，假設為0
-        V = row.get("WindSpeed", 0)
-        # 計算露點
+    for _, row in df.iterrows():
+        T = row["air_temperature"]
+        RH = row["relative_humidity"]
+        precip = row.get("precipitation", 0)
+        V = row.get("wind_speed", 0)
         Td = compute_dew_point(T, RH)
-        # 計算體感溫度
         T_app = compute_apparent_temperature(T, V, RH)
-        # 降雨機率
         P_rain = compute_prob_precipitation(precip)
-        # 舒適度指數
         CI = compute_comfort_index(T, Td)
-        record = {
+        transformed.append({
             "Temperature": T,
             "DewPoint": Td,
             "ApparentTemperature": T_app,
@@ -110,46 +69,102 @@ def transform_data(df):
             "WindSpeed": V,
             "ProbabilityOfPrecipitation": P_rain,
             "ComfortIndex": CI,
-            "date_time": row["date_time"]
-        }
-        transformed.append(record)
+        })
     return transformed
 
-# 將連續資料依照時間順序分組成固定長度的序列（例如 24 小時一組）
+#############################################
+# 5. 將連續資料依時間順序分組成固定長度的序列（例如24小時一組）
+#############################################
 def group_into_sequences(records, seq_len=24):
-    # records 已經依 date_time 排序
     sequences = []
     num_records = len(records)
-    # 依次取連續的 seq_len 筆資料（可以採用滑動窗口或固定分組）
-    # 這裡採用固定分組：從頭開始每 24 筆作為一組，忽略不足 24 筆的最後一組
+    # 固定分組：每 seq_len 筆作為一組，忽略不足 seq_len 筆的最後一組
     for i in range(0, num_records - seq_len + 1, seq_len):
         seq = records[i:i+seq_len]
-        sequences.append(seq)
+        sequences.append(seq)  # 每個 seq 為一個 list，每筆記錄仍為字典
     return sequences
 
+#############################################
+# 6. 生成時間權重（隨機選擇 "U", "increasing", "decreasing" 模式）
+#############################################
+def generate_time_weights(batch_size, seq_len, device="cpu", low=0.5, high=1.5):
+    import random
+    if seq_len < 2:
+        raise ValueError("Sequence length must be at least 2.")
+    pattern = random.choice(["U", "increasing", "decreasing"])
+    print(f"隨機選擇的時間權重模式: {pattern}")
+    if pattern == "U":
+        half = seq_len // 2
+        if seq_len % 2 == 0:
+            left = np.linspace(low, high, half)
+            right = np.linspace(high, low, half)
+            weights = np.concatenate([left, right])
+        else:
+            left = np.linspace(low, high, half + 1)
+            right = np.linspace(high, low, half + 1)[1:]
+            weights = np.concatenate([left, right])
+    elif pattern == "increasing":
+        weights = np.linspace(low, high, seq_len)
+    elif pattern == "decreasing":
+        weights = np.linspace(high, low, seq_len)
+    else:
+        raise ValueError("Unknown pattern.")
+    weights = np.tile(weights, (batch_size, 1)).reshape(batch_size, seq_len, 1)
+    return torch.tensor(weights, dtype=torch.float32, device=device)
+
+#############################################
+# 7. 儲存處理後的結果（保留字典形式的序列與 input_ids 映射）
+#############################################
+def tensor_converter(o):
+    if isinstance(o, (np.ndarray, torch.Tensor)):
+        return o.tolist()
+    raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
+
+def save_sequences(data, filename="data/processed_weather.json"):
+    with open(filename, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4, default=tensor_converter)
+    print(f"處理後資料已儲存至 {filename}")
+
+#############################################
+# 主程式
+#############################################
 def main():
-    # 載入原始資料
-    raw_records = load_raw_data("data/Data.json")  # 根據實際檔案位置
-    # 欄位需要清洗：Temperature, RelativeHumidity, Precipitation, WindSpeed
-    fields_to_clean = ["Temperature", "RelativeHumidity", "Precipitation", "WindSpeed"]
-    df = clean_data(raw_records, fields_to_clean)
+    # 讀取原始資料
+    raw_records = load_raw_data("data/Data.json")
+    # 清洗欄位：air_temperature, relative_humidity, precipitation, wind_speed
+    fields_to_clean = ["air_temperature", "relative_humidity", "precipitation", "wind_speed"]
+    df = pd.DataFrame(raw_records)
+    df["date_time"] = pd.to_datetime(df["date_time"])
+    df.sort_values("date_time", inplace=True)
+    df = clean_data(df, fields_to_clean)
     print("清洗後資料筆數:", len(df))
     
-    # 轉換成我們需要的特徵
+    # 轉換成衍生特徵（保留字典形式，每筆記錄含鍵值）
     transformed_records = transform_data(df)
     
-    # 根據 date_time 排序（若尚未排序）
-    transformed_records.sort(key=lambda x: x["date_time"])
+    print("生成序列數:", len(transformed_records))
     
-    # 分組成連續序列，每組 24 筆
-    # sequences = group_into_sequences(transformed_records, seq_len=24)
-    # print("生成序列數:", len(sequences))
+    # 組合最終輸出，保留 input_ids 映射
+    output_data = {
+        "input_ids": [
+            "Temperature",
+            "DewPoint",
+            "ApparentTemperature",
+            "RelativeHumidity",
+            "WindSpeed",
+            "ProbabilityOfPrecipitation",
+            "ComfortIndex"
+        ],
+        "sequences": transformed_records  # 每個序列是一個 list，每筆記錄為字典
+    }
     
-    # 最後，可將序列資料儲存為 JSON 或 CSV 用於後續訓練
-    output_filepath = "data/processed_weather.json"
-    with open(output_filepath, "w", encoding="utf-8") as f:
-        json.dump(transformed_records, f, indent=4, default=str)
-    print(f"處理後資料已儲存至 {output_filepath}")
+    # # 生成時間權重，形狀為 [num_sequences, 24, 1]
+    # batch_size = len(transformed_records)
+    # time_weights = generate_time_weights(batch_size, device="cpu")
+    # output_data["time_weights"] = time_weights
+    
+    # 儲存結果
+    save_sequences(output_data, filename="data/processed_weather.json")
 
 if __name__ == "__main__":
     main()

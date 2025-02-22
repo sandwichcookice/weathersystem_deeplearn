@@ -1,226 +1,347 @@
-import argparse
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import os
+import math
 import json
+import random
+import numpy as np
+import gym
 import torch
 import torch.nn as nn
-import torch.optim as optim
-from torch.utils.data import DataLoader, TensorDataset
-import numpy as np
 import torch.nn.functional as F
+from collections import deque
 
-# -------------------------------
-# 從 generate_weather.py 引入資料生成函式
-# -------------------------------
-from .scripts.generate_weather import load_true_weather_ids, generate_weather
+#########################################
+# 生成時間權重 (來自舊訓練腳本)
+#########################################
+def generate_time_weights(batch_size, seq_len, device="cpu", low=0.5, high=1.5):
+    pattern = random.choice(["U", "increasing", "decreasing"])
+    if pattern == "U":
+        half = seq_len // 2
+        if seq_len % 2 == 0:
+            left = np.linspace(low, high, half)
+            right = np.linspace(high, low, half)
+            weights = np.concatenate([left, right])
+        else:
+            left = np.linspace(low, high, half + 1)
+            right = np.linspace(high, low, half + 1)[1:]
+            weights = np.concatenate([left, right])
+    elif pattern == "increasing":
+        weights = np.linspace(low, high, seq_len)
+    elif pattern == "decreasing":
+        weights = np.linspace(high, low, seq_len)
+    else:
+        raise ValueError("Unknown pattern.")
+    weights = np.tile(weights, (batch_size, 1)).reshape(batch_size, seq_len, 1)
+    return torch.tensor(weights, dtype=torch.float32, device=device)
 
-# -------------------------------
-# 注意力層：採用乘法方式將先驗時間權重整合進來
-# -------------------------------
-class AttentionLayer(nn.Module):
-    def __init__(self, hidden_dim):
-        super(AttentionLayer, self).__init__()
-        self.attn = nn.Linear(hidden_dim, 1)  # 可訓練參數
-        
-    def forward(self, lstm_outputs, time_weights):
-        # lstm_outputs: [batch_size, seq_len, hidden_dim]
-        # time_weights: [batch_size, seq_len, 1]
-        scores = self.attn(lstm_outputs)         # [batch_size, seq_len, 1]
-        scores = scores * time_weights           # 將先驗時間權重乘上去
-        scores = scores.squeeze(-1)              # [batch_size, seq_len]
-        attn_weights = F.softmax(scores, dim=1)    # 得到權重分佈 [batch_size, seq_len]
-        attn_weights = attn_weights.unsqueeze(-1) # [batch_size, seq_len, 1]
-        context = torch.sum(lstm_outputs * attn_weights, dim=1)  # [batch_size, hidden_dim]
-        return context, attn_weights
+#########################################
+# 讀取 training_data.json 檔案
+#########################################
+TRAINING_DATA_PATH = os.path.join(os.path.dirname(__file__), "training_data.json")
+with open(TRAINING_DATA_PATH, "r", encoding="utf-8") as f:
+    training_data = json.load(f)
 
-# -------------------------------
-# LSTM 與注意力整合的 Dueling DQN 模型定義
-# -------------------------------
-class LSTM_Attention_DDQN(nn.Module):
-    def __init__(self, input_dim, lstm_hidden_dim, lstm_layers, output_dim, seq_len):
-        """
-        input_dim: 每個時間步的特徵數（例如 rain_prob, temperature）
-        lstm_hidden_dim: LSTM 隱藏層維度
-        lstm_layers: LSTM 層數
-        output_dim: 輸出決策數量（根據 output_ids 的長度）
-        seq_len: 時間序列長度（例如一天 8 個時間點）
-        """
-        super(LSTM_Attention_DDQN, self).__init__()
-        self.seq_len = seq_len
-        self.output_dim = output_dim
+# 取得必要參數與超參數
+INPUT_IDS = training_data.get("input_ids", [])
+OUTPUT_IDS = training_data.get("output_ids", [])
+RULES = training_data.get("rules", [])
+training_params = training_data.get("training", {})
+learning_rate = training_params.get("learning_rate", 0.001)
+batch_size = training_params.get("batch_size", 32)
+num_episodes = training_params.get("num_epochs", 100)  # 這裡用 num_epochs 當作總 episode 數
+gamma = training_params.get("gamma", 0.99)
+learning_starts = training_params.get("learning_starts", 1000)
+replay_buffer_capacity = training_params.get("replay_buffer_size", 50000)
+exploration_config = training_params.get("exploration_config", {"epsilon_timesteps": 10000, "final_epsilon": 0.02})
+
+# 設定 epsilon 探索參數
+initial_epsilon = 1.0
+final_epsilon = exploration_config.get("final_epsilon", 0.02)
+epsilon_decay_steps = exploration_config.get("epsilon_timesteps", 10000)
+
+#########################################
+# 讀取 split_weather_continuous.json 檔案 (預測與真實資料)
+#########################################
+SPLIT_DATA_PATH = os.path.join(os.path.dirname(__file__), "data", "split_weather_continuous.json")
+with open(SPLIT_DATA_PATH, "r", encoding="utf-8") as f:
+    split_data = json.load(f)
+# 如果 split_data 中有 input_ids，則使用；否則沿用 training_data 的
+INPUT_IDS = split_data.get("input_ids", INPUT_IDS)
+PREDICTED_RECORDS = split_data.get("predicted_records", [])
+REAL_RECORDS = split_data.get("real_records", [])
+DATA_LEN = len(PREDICTED_RECORDS)
+
+#########################################
+# 定義 Replay Buffer
+#########################################
+class ReplayBuffer:
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.buffer = []
+        self.position = 0
+
+    def push(self, state, action, reward, next_state, done):
+        if len(self.buffer) < self.capacity:
+            self.buffer.append(None)
+        self.buffer[self.position] = (state, action, reward, next_state, done)
+        self.position = (self.position + 1) % self.capacity
+
+    def sample(self, batch_size):
+        indices = np.random.choice(len(self.buffer), batch_size, replace=False)
+        batch = [self.buffer[idx] for idx in indices]
+        states, actions, rewards, next_states, dones = zip(*batch)
+        return states, actions, rewards, next_states, dones
+
+    def __len__(self):
+        return len(self.buffer)
+
+#########################################
+# 定義自注意力層
+#########################################
+class SelfAttention(nn.Module):
+    def __init__(self, d_model):
+        super(SelfAttention, self).__init__()
+        self.query = nn.Linear(d_model, d_model)
+        self.key = nn.Linear(d_model, d_model)
+        self.value = nn.Linear(d_model, d_model)
+        self.scale = math.sqrt(d_model)
+
+    def forward(self, x):
+        # x: (batch_size, seq_len, d_model)
+        Q = self.query(x)          # (B, T, d_model)
+        K = self.key(x)            # (B, T, d_model)
+        V = self.value(x)          # (B, T, d_model)
+        scores = torch.bmm(Q, K.transpose(1, 2)) / self.scale  # (B, T, T)
+        attn_weights = torch.softmax(scores, dim=-1)            # (B, T, T)
+        out = torch.bmm(attn_weights, V)                          # (B, T, d_model)
+        return out
+
+#########################################
+# 定義模型架構 – WeatherDDQNModel
+#########################################
+class WeatherDDQNModel(nn.Module):
+    def __init__(self):
+        super(WeatherDDQNModel, self).__init__()
+        # 第一層 Bi-LSTM：輸入 7 維，隱藏單元 64，雙向 (輸出維度 = 64*2 = 128)
+        self.lstm1 = nn.LSTM(input_size=7, hidden_size=64, batch_first=True, bidirectional=True)
+        # 第二層 Bi-LSTM：輸入 128 維，隱藏單元 64，雙向 (輸出 128)
+        self.lstm2 = nn.LSTM(input_size=128, hidden_size=64, batch_first=True, bidirectional=True)
         
-        # LSTM 層：輸入 shape 為 [batch, seq_len, input_dim]
-        self.lstm = nn.LSTM(input_dim, lstm_hidden_dim, lstm_layers, batch_first=True)
-        # 注意力層：輸入 LSTM 的所有時間步輸出與時間權重
-        self.attention = AttentionLayer(lstm_hidden_dim)
+        # 第一層注意力：使用固定時間權重與 lstm1 輸出作乘法融合
+        # 第二層注意力：自注意力層
+        self.attention2 = SelfAttention(d_model=128)
         
-        # 全連接層
-        self.fc1 = nn.Linear(lstm_hidden_dim, 128)
+        # 共享全連接層
+        self.fc1 = nn.Linear(128, 128)
         self.fc2 = nn.Linear(128, 128)
         
-        # Advantage 分支
+        # Advantage branch
         self.adv_hidden = nn.Linear(128, 128)
-        self.advantage_stream = nn.Linear(128, output_dim * 2)  # 每個決策有 2 個 Q 值
+        self.adv_stream = nn.Linear(128, 22)  # 22 = 2 x 11
         
-        # Value 分支
+        # Value branch
         self.val_hidden = nn.Linear(128, 128)
-        self.value_stream = nn.Linear(128, output_dim)
-        
-    def forward(self, x, time_weights):
+        self.val_stream = nn.Linear(128, 11)    # 每個建議一個 value
+
+    def forward(self, x, time_weight):
         """
-        x: [batch_size, seq_len, input_dim] 的時間序列數據
-        time_weights: [batch_size, seq_len, 1] 的先驗時間權重
+        x: Tensor，形狀 (B, 24, 7)
+        time_weight: Tensor，形狀 (B, 24)；僅用於第一層注意力，故在使用前 detach
         """
-        lstm_out, _ = self.lstm(x)  # [batch_size, seq_len, lstm_hidden_dim]
-        context, attn_weights = self.attention(lstm_out, time_weights)  # context: [batch_size, lstm_hidden_dim]
+        lstm1_out, _ = self.lstm1(x)  # (B, 24, 128)
+        fixed_weight = time_weight.detach().unsqueeze(-1)  # (B, 24, 1)
+        attn1_out = lstm1_out * fixed_weight                # (B, 24, 128)
+        lstm2_out, _ = self.lstm2(attn1_out)                # (B, 24, 128)
+        attn2_out = self.attention2(lstm2_out)              # (B, 24, 128)
+        pooled = torch.mean(attn2_out, dim=1)               # (B, 128)
+        shared = F.relu(self.fc1(pooled))
+        shared = F.relu(self.fc2(shared))
         
-        out = F.relu(self.fc1(context))
-        out = F.relu(self.fc2(out))
+        adv = F.relu(self.adv_hidden(shared))
+        adv = self.adv_stream(adv)                          # (B, 22)
+        adv = adv.view(-1, 11, 2)                           # (B, 11, 2)
         
-        adv = F.relu(self.adv_hidden(out))
-        adv = self.advantage_stream(adv)
-        adv = adv.view(-1, self.output_dim, 2)
+        val = F.relu(self.val_hidden(shared))
+        val = self.val_stream(val)                          # (B, 11)
+        val = val.view(-1, 11, 1)                           # (B, 11, 1)
         
-        val = F.relu(self.val_hidden(out))
-        val = self.value_stream(val)
-        val = val.unsqueeze(2)
+        # Dueling 結構：Q = V + (A - mean(A))
+        adv_mean = adv.mean(dim=2, keepdim=True)
+        q_vals = val + (adv - adv_mean)                     # (B, 11, 2)
         
-        q_values = val + (adv - adv.mean(dim=2, keepdim=True))
-        return q_values, attn_weights
+        # 聚合 value 輸出：取 11 個 value 的平均 (B, 11, 1) -> (B,)
+        self._value_out = torch.mean(val, dim=1).squeeze(-1)
+        return q_vals
 
-# -------------------------------
-# 資料集生成函式
-# -------------------------------
-def generate_training_data(num_samples, seq_len, input_ids, input_specs, true_weather_ids, device):
-    """
-    利用 generate_weather.py 中的 generate_weather 函式來生成時間序列資料。
-    為了建立時間序列，每個樣本我們依序生成 seq_len 個時間點的預測數據，
-    並轉換為 tensor，形狀為 [num_samples, seq_len, input_dim]。
-    """
-    X_seq = []
-    # 對每個時間步，呼叫 generate_weather 生成單個時間點的資料
-    for t in range(seq_len):
-        # 注意：每次產生的 batch 都是 num_samples 筆，產生的 predicted_weather_list 為 list of dict
-        predicted_weather_list, _ = generate_weather(input_ids, input_specs, true_weather_ids, device, batch_size=num_samples)
-        # 將 list of dict 轉換為 [num_samples, input_dim] 的數據矩陣
-        X_t = []
-        for sample in predicted_weather_list:
-            # 依照 input_ids 的順序提取數值
-            row = [sample[key] for key in input_ids]
-            X_t.append(row)
-        X_t = torch.tensor(X_t, dtype=torch.float32, device=device)  # [num_samples, input_dim]
-        X_seq.append(X_t.unsqueeze(1))  # [num_samples, 1, input_dim]
-    # 沿著時間軸串接得到 [num_samples, seq_len, input_dim]
-    X_seq = torch.cat(X_seq, dim=1)
-    return X_seq
+#########################################
+# 定義 Gym 環境 – WeatherEnv
+#########################################
+class WeatherEnv(gym.Env):
+    def __init__(self, env_config=None):
+        super(WeatherEnv, self).__init__()
+        self.observation_space = gym.spaces.Dict({
+            "weather": gym.spaces.Box(low=-np.inf, high=np.inf, shape=(24, 7), dtype=np.float32),
+            "time_weight": gym.spaces.Box(low=-np.inf, high=np.inf, shape=(24,), dtype=np.float32)
+        })
+        self.action_space = gym.spaces.MultiBinary(11)
+        
+        self.predicted_records = PREDICTED_RECORDS
+        self.real_records = REAL_RECORDS
+        self.rules = RULES
+        
+        if len(self.predicted_records) < 24 or len(self.real_records) < 24:
+            raise Exception("資料數量不足，無法組成 24 筆連續資料")
+        self.data_len = len(self.predicted_records)
+    
+    def reset(self):
+        start_idx = np.random.randint(0, self.data_len - 24 + 1)
+        self.current_index = start_idx
+        block = self.predicted_records[start_idx : start_idx + 24]
+        weather_block = []
+        for rec in block:
+            row = [rec.get(key, 0.0) for key in INPUT_IDS]
+            weather_block.append(row)
+        weather_block = np.array(weather_block, dtype=np.float32)
+        # 生成時間權重
+        time_weight_tensor = generate_time_weights(1, 24, device="cpu", low=0.5, high=1.5)
+        time_weight = time_weight_tensor[0, :, 0].cpu().numpy()
+        obs = {"weather": weather_block, "time_weight": time_weight}
+        return obs
 
-# -------------------------------
-# 建立固定的先驗時間權重函式
-# -------------------------------
-def get_time_weights(num_samples, seq_len, device):
-    """
-    回傳固定的時間權重，shape 為 [num_samples, seq_len, 1]。
-    例如假設早上的權重較高，設定一個 [8] 陣列
-    """
-    # 這裡定義一個長度為 seq_len 的先驗權重陣列
-    time_weight_array = np.array([1.0, 1.2, 1.5, 1.5, 1.2, 1.0, 0.8, 0.5], dtype=np.float32)
-    if len(time_weight_array) != seq_len:
-        # 若 seq_len 與陣列長度不同，可重複或截斷
-        time_weight_array = np.resize(time_weight_array, seq_len)
-    # 擴展為 [num_samples, seq_len, 1]
-    T = np.tile(time_weight_array, (num_samples, 1)).reshape(num_samples, seq_len, 1)
-    return torch.tensor(T, dtype=torch.float32, device=device)
+    def step(self, action):
+        block = self.real_records[self.current_index : self.current_index + 24]
+        total_reward = 0.0
+        for rec in block:
+            total_reward += evaluate_reward(self.rules, rec, action)
+        done = True  # 每個 episode 為單步（24 筆資料）
+        info = {"start_index": self.current_index}
+        return self.reset(), total_reward, done, info
 
-# -------------------------------
-# 訓練函式
-# -------------------------------
-def train(model, optimizer, criterion, train_loader, num_epochs, device):
-    model.train()
-    for epoch in range(num_epochs):
-        total_loss = 0.0
-        for batch_states, batch_targets, batch_time_weights in train_loader:
-            batch_states = batch_states.to(device)
-            batch_targets = batch_targets.to(device)
-            batch_time_weights = batch_time_weights.to(device)
-            
+#########################################
+# Reward 評估函數
+#########################################
+def evaluate_reward(rules, real_record, action):
+    variables = {}
+    variables.update(real_record)
+    for i, key in enumerate(OUTPUT_IDS):
+        variables[key] = bool(action[i])
+    total_reward = 0.0
+    for rule in rules:
+        condition = rule.get("condition", "")
+        try:
+            if eval(condition, {}, variables):
+                total_reward += float(rule.get("reward", 0))
+        except Exception as e:
+            print("條件評估錯誤:", condition, variables, e)
+    return total_reward
+
+#########################################
+# 定義 Replay Buffer 類別（如上）
+#########################################
+# 已經定義在前面，此處重複即可
+
+#########################################
+# 主程序 – 手動實作 DDQN 演算法的訓練流程
+#########################################
+if __name__ == "__main__":
+    # 建立環境
+    env = WeatherEnv()
+    # 建立主網路與目標網路
+    model = WeatherDDQNModel()
+    target_model = WeatherDDQNModel()
+    target_model.load_state_dict(model.state_dict())
+    target_model.eval()
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+    replay_buffer = ReplayBuffer(replay_buffer_capacity)
+
+    total_steps = 0
+    target_update_freq = 1000  # 每 1000 個步驟更新目標網路
+    episode_rewards = []
+
+    # 訓練迴圈（以 episode 為單位，每個 episode 為一個 step）
+    for episode in range(num_episodes):
+        obs = env.reset()
+        done = False
+        episode_reward = 0
+
+        # 由於每個 episode 只有一個 step（環境設計），故只執行一次
+        total_steps += 1
+
+        # 計算當前 epsilon（線性衰減）
+        epsilon = max(final_epsilon, initial_epsilon - (initial_epsilon - final_epsilon) * (total_steps / epsilon_decay_steps))
+        # epsilon-greedy 選擇動作
+        if random.random() < epsilon:
+            # 隨機產生 11 維二元動作
+            action = np.random.randint(0, 2, size=(11,))
+        else:
+            model.eval()
+            with torch.no_grad():
+                state_weather = torch.tensor(obs["weather"], dtype=torch.float32).unsqueeze(0)  # (1, 24, 7)
+                state_time = torch.tensor(obs["time_weight"], dtype=torch.float32).unsqueeze(0)    # (1, 24)
+                q_vals = model(state_weather, state_time)  # (1, 11, 2)
+                q_vals = q_vals.squeeze(0)  # (11, 2)
+                action = q_vals.argmax(dim=1).cpu().numpy()
+        # 執行動作
+        next_obs, reward, done, info = env.step(action)
+        episode_reward += reward
+
+        # 存入 replay buffer
+        replay_buffer.push(obs, action, reward, next_obs, done)
+        obs = next_obs
+
+        # 當 replay buffer 足夠大後開始訓練
+        if len(replay_buffer) >= learning_starts:
+            # 隨機抽取一個 mini-batch
+            states, actions, rewards, next_states, dones = replay_buffer.sample(batch_size)
+
+            # 將 states 中的 "weather" 與 "time_weight" 分離，並轉換為 tensor
+            states_weather = torch.tensor(np.array([s["weather"] for s in states]), dtype=torch.float32)
+            states_time = torch.tensor(np.array([s["time_weight"] for s in states]), dtype=torch.float32)
+            next_states_weather = torch.tensor(np.array([s["weather"] for s in next_states]), dtype=torch.float32)
+            next_states_time = torch.tensor(np.array([s["time_weight"] for s in next_states]), dtype=torch.float32)
+            actions_tensor = torch.tensor(np.array(actions), dtype=torch.long)  # shape (batch, 11)
+            rewards_tensor = torch.tensor(np.array(rewards), dtype=torch.float32)  # shape (batch,)
+            dones_tensor = torch.tensor(np.array(dones), dtype=torch.float32)  # shape (batch,)
+
+            # 計算主網路的 Q 值
+            q_vals = model(states_weather, states_time)  # (batch, 11, 2)
+            # 對每個決策取 argmax 後使用 torch.gather
+            actions_tensor_expanded = actions_tensor.unsqueeze(2)  # (batch, 11, 1)
+            chosen_q_vals = torch.gather(q_vals, 2, actions_tensor_expanded).squeeze(2)  # (batch, 11)
+            current_q = chosen_q_vals.mean(dim=1)  # 聚合 11 個決策的 Q 值 (batch,)
+
+            # Double DQN：先用主網路選出 next_state 的最佳動作，再用目標網路評估該動作的 Q 值
+            with torch.no_grad():
+                next_q_vals_main = model(next_states_weather, next_states_time)  # (batch, 11, 2)
+                next_actions = next_q_vals_main.argmax(dim=2)  # (batch, 11)
+                next_actions_expanded = next_actions.unsqueeze(2)  # (batch, 11, 1)
+                next_q_vals_target = target_model(next_states_weather, next_states_time)  # (batch, 11, 2)
+                next_chosen_q_vals = torch.gather(next_q_vals_target, 2, next_actions_expanded).squeeze(2)  # (batch, 11)
+                next_q = next_chosen_q_vals.mean(dim=1)  # (batch,)
+                target_q = rewards_tensor + gamma * next_q * (1 - dones_tensor)
+
+            loss = F.mse_loss(current_q, target_q)
+
             optimizer.zero_grad()
-            outputs, _ = model(batch_states, batch_time_weights)
-            loss = criterion(outputs, batch_targets)
             loss.backward()
             optimizer.step()
-            total_loss += loss.item()
-        avg_loss = total_loss / len(train_loader)
-        print(f"Epoch {epoch+1}/{num_epochs}, Loss: {avg_loss:.4f}")
 
-# -------------------------------
-# 主程式
-# -------------------------------
-def main():
-    parser = argparse.ArgumentParser(description="訓練 LSTM_Attention_DDQN 模型")
-    parser.add_argument("--config_json", type=str, required=True,
-                        help="包含模型結構與訓練參數的 JSON 配置文件")
-    parser.add_argument("--save_model", type=str, default="lstm_attention_ddqn_model.pth",
-                        help="保存訓練後模型的檔案名稱")
-    args = parser.parse_args()
+            if total_steps % 100 == 0:
+                print(f"Step: {total_steps}, Loss: {loss.item():.4f}")
 
-    # 讀取 config.json
-    with open(args.config_json, "r", encoding="utf-8") as f:
-        config = json.load(f)
-    
-    input_ids = config["input_ids"]
-    output_ids = config["output_ids"]
-    input_dim = len(input_ids)
-    output_dim = len(output_ids)
-    
-    # 取得時間序列相關參數
-    lstm_config = config["model_details"]["lstm_layer"]
-    seq_len = lstm_config.get("sequence_length", 8)
-    lstm_hidden_dim = lstm_config.get("lstm_hidden_dim", 64)
-    lstm_layers = lstm_config.get("lstm_layers", 1)
-    
-    training_params = config.get("training", {})
-    learning_rate = training_params.get("learning_rate", 0.001)
-    batch_size = training_params.get("batch_size", 32)
-    num_epochs = training_params.get("num_epochs", 100)
-    optimizer_type = training_params.get("optimizer", "Adam")
-    
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    # 從 generate_weather.py 載入 true_weather_ids
-    true_weather_ids = load_true_weather_ids()
-    
-    # 建立訓練資料：
-    num_samples = 1000
-    # 利用外部資料生成腳本產生時間序列資料： shape [num_samples, seq_len, input_dim]
-    X_seq = generate_training_data(num_samples, seq_len, input_ids, config["input_specs"], true_weather_ids, device)
-    # 目標 Q 值：示範用隨機生成，形狀 [num_samples, output_dim, 2]
-    y = np.random.rand(num_samples, output_dim, 2).astype(np.float32)
-    y = torch.tensor(y, dtype=torch.float32, device=device)
-    # 取得先驗時間權重，形狀 [num_samples, seq_len, 1]
-    T = get_time_weights(num_samples, seq_len, device)
-    
-    # 建立資料集與 DataLoader
-    train_dataset = TensorDataset(X_seq, y, T)
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-    
-    # 建立模型
-    model = LSTM_Attention_DDQN(input_dim, lstm_hidden_dim, lstm_layers, output_dim, seq_len)
-    model.to(device)
-    
-    # 選擇 optimizer
-    if optimizer_type.lower() == "adam":
-        optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-    elif optimizer_type.lower() == "sgd":
-        optimizer = optim.SGD(model.parameters(), lr=learning_rate)
-    else:
-        raise ValueError(f"不支援的 optimizer 類型：{optimizer_type}")
-    
-    # 定義損失函數
-    criterion = nn.MSELoss()
-    
-    print("開始訓練...")
-    train(model, optimizer, criterion, train_loader, num_epochs, device)
-    
-    torch.save(model.state_dict(), args.save_model)
-    print(f"模型已保存至 {args.save_model}")
+            # 定期更新目標網路
+            if total_steps % target_update_freq == 0:
+                target_model.load_state_dict(model.state_dict())
 
-if __name__ == "__main__":
-    main()
+        episode_rewards.append(episode_reward)
+        print(f"Episode: {episode+1}, Reward: {episode_reward:.2f}, Epsilon: {epsilon:.3f}")
+
+        # 每 10 個 episode 存檔一次
+        if (episode + 1) % 1000 == 0:
+            os.makedirs("./model/log", exist_ok=True)
+            torch.save(model.state_dict(), f"./model/log/model_checkpoint_episode_{episode+1}.pth")
+
+    print("Training completed.")
