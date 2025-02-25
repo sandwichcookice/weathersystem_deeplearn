@@ -99,10 +99,10 @@
     },
     "optimizer": "Adam"
   },
-"rules": [
+  "rules": [
     {
       "condition": "actual_rain == True and carry_umbrella == False",
-      "reward": "-10"
+      "reward": "-15"
     },
     {
       "condition": "actual_rain == True and carry_umbrella == True",
@@ -110,7 +110,7 @@
     },
     {
       "condition": "actual_rain == False and carry_umbrella == True",
-      "reward": "-5"
+      "reward": "-8"
     },
     {
       "condition": "actual_rain == False and carry_umbrella == False",
@@ -118,7 +118,7 @@
     },
     {
       "condition": "apparent_temp < 13 and wearing_warm_clothes == False",
-      "reward": "-10"
+      "reward": "-15"
     },
     {
       "condition": "apparent_temp < 13 and wearing_warm_clothes == True",
@@ -126,7 +126,7 @@
     },
     {
       "condition": "apparent_temp > 27 and wearing_warm_clothes == True",
-      "reward": "-10"
+      "reward": "-15"
     },
     {
       "condition": "apparent_temp > 27 and wearing_warm_clothes == False",
@@ -138,7 +138,7 @@
     },
     {
       "condition": "actual_temp < 13 and relative_humidity > 70 and damp_cold == False",
-      "reward": "-10"
+      "reward": "-15"
     },
     {
       "condition": "actual_temp < 13 and relative_humidity < 50 and dry_cold == True",
@@ -146,7 +146,7 @@
     },
     {
       "condition": "actual_temp < 13 and relative_humidity < 50 and dry_cold == False",
-      "reward": "-10"
+      "reward": "-15"
     },
     {
       "condition": "actual_temp < 13 and relative_humidity >= 50 and relative_humidity <= 70 and damp_cold == False and dry_cold == False",
@@ -154,7 +154,7 @@
     },
     {
       "condition": "actual_temp < 13 and relative_humidity >= 50 and relative_humidity <= 70 and (damp_cold == True or dry_cold == True)",
-      "reward": "-5"
+      "reward": "-8"
     },
     {
       "condition": "actual_temp > 27 and relative_humidity > 70 and damp_hot == True",
@@ -162,7 +162,7 @@
     },
     {
       "condition": "actual_temp > 27 and relative_humidity > 70 and damp_hot == False",
-      "reward": "-10"
+      "reward": "-15"
     },
     {
       "condition": "actual_temp > 27 and relative_humidity < 50 and dry_hot == True",
@@ -170,7 +170,7 @@
     },
     {
       "condition": "actual_temp > 27 and relative_humidity < 50 and dry_hot == False",
-      "reward": "-10"
+      "reward": "-15"
     },
     {
       "condition": "actual_temp > 27 and relative_humidity >= 50 and relative_humidity <= 70 and damp_hot == False and dry_hot == False",
@@ -178,7 +178,7 @@
     },
     {
       "condition": "actual_temp > 27 and relative_humidity >= 50 and relative_humidity <= 70 and (damp_hot == True or dry_hot == True)",
-      "reward": "-5"
+      "reward": "-8"
     },
     {
       "condition": "apparent_temp < 13 and wind_speed > 7 and wind_cold == True",
@@ -186,7 +186,7 @@
     },
     {
       "condition": "apparent_temp < 13 and wind_speed > 7 and wind_cold == False",
-      "reward": "-10"
+      "reward": "-15"
     },
     {
       "condition": "apparent_temp < 13 and wind_speed <= 7 and wind_cold == False",
@@ -194,7 +194,7 @@
     },
     {
       "condition": "apparent_temp < 13 and wind_speed <= 7 and wind_cold == True",
-      "reward": "-5"
+      "reward": "-8"
     },
     {
       "condition": "apparent_temp > 27 and wind_speed > 7 and wind_hot == True",
@@ -202,7 +202,7 @@
     },
     {
       "condition": "apparent_temp > 27 and wind_speed > 7 and wind_hot == False",
-      "reward": "-10"
+      "reward": "-15"
     },
     {
       "condition": "apparent_temp > 27 and wind_speed <= 7 and wind_hot == False",
@@ -210,7 +210,7 @@
     },
     {
       "condition": "apparent_temp > 27 and wind_speed <= 7 and wind_hot == True",
-      "reward": "-5"
+      "reward": "-8"
     },
     {
       "condition": "comfort_index >= 15 and outdoor_recommended == True",
@@ -218,7 +218,7 @@
     },
     {
       "condition": "comfort_index >= 15 and outdoor_recommended == False",
-      "reward": "-10"
+      "reward": "-15"
     },
     {
       "condition": "comfort_index < 15 and outdoor_recommended == False",
@@ -226,7 +226,7 @@
     },
     {
       "condition": "comfort_index < 15 and outdoor_recommended == True",
-      "reward": "-10"
+      "reward": "-15"
     },
     {
       "condition": "apparent_temp > 27 and increase_water_intake == True",
@@ -234,7 +234,7 @@
     },
     {
       "condition": "apparent_temp > 27 and increase_water_intake == False",
-      "reward": "-10"
+      "reward": "-15"
     },
     {
       "condition": "apparent_temp < 13 and dew_point < 0 and increase_water_intake == True",
@@ -242,7 +242,7 @@
     },
     {
       "condition": "apparent_temp < 13 and dew_point < 0 and increase_water_intake == False",
-      "reward": "-10"
+      "reward": "-15"
     },
     {
       "condition": "not(apparent_temp > 27 or (apparent_temp < 13 and dew_point < 0)) and increase_water_intake == False",
@@ -250,7 +250,7 @@
     },
     {
       "condition": "not(apparent_temp > 27 or (apparent_temp < 13 and dew_point < 0)) and increase_water_intake == True",
-      "reward": "-5"
+      "reward": "-15"
     },
     {
       "condition": "(actual_temp - dew_point) < 2 and actual_temp < 13 and ground_slippery_warning == True",
@@ -258,7 +258,7 @@
     },
     {
       "condition": "(actual_temp - dew_point) < 2 and actual_temp < 13 and ground_slippery_warning == False",
-      "reward": "-10"
+      "reward": "-15"
     },
     {
       "condition": "not((actual_temp - dew_point) < 2 and actual_temp < 13) and ground_slippery_warning == False",
@@ -266,7 +266,27 @@
     },
     {
       "condition": "not((actual_temp - dew_point) < 2 and actual_temp < 13) and ground_slippery_warning == True",
-      "reward": "-5"
+      "reward": "-8"
+    },
+    {
+      "condition": "dry_cold == True and dry_hot == True",
+      "reward": "-15"
+    },
+    {
+      "condition": "damp_cold == True and damp_hot == True",
+      "reward": "-15"
+    },
+    {
+      "condition": "dry_cold == True and damp_cold == True",
+      "reward": "-15"
+    },
+    {
+      "condition": "dry_hot == True and damp_hot == True",
+      "reward": "-15"
+    },
+    {
+      "condition": "wind_cold == True and wind_hot == True",
+      "reward": "-15"
     }
   ]
 }
