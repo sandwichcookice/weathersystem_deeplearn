@@ -2,3 +2,5 @@ __pycache__
 .vscode
 pyenv
 weathersystem_deeplearn.code-workspace
+/data/Data_history
+/data/Data_history.zip
