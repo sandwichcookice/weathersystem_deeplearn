@@ -48,3 +48,26 @@
 - data資料夾將被永久遺忘 因為資料量的增加，導致無法上傳至github，所以由其他載體進行轉移
 ### (Delete)
 - 原先使用py的清洗腳本(Complete_split_weather.py)被刪除，因為新的腳本是使用C++來編寫
+
+## [v.0.7.0]
+### (Update)
+- Unzip.py 在MacOs上面用的
+- trainingDataMove.py 用來移動訓練資料 到訓練/驗證/測試 集中
+- trainscripts 這邊專門存放15種方式的訓練腳本
+### (important)
+- 在這個版本中 我們初步的完成了DQN的實作 並完善了他的腳本 在接下來的版本中會一一更新剩下的十四種
+1. ~~DQN~~
+1. Double DQN
+2. Dueling DQN
+3. Policy Gradient (REINFORCE)
+4. Actor-Critic (例如 A3C)
+5. Proximal Policy Optimization (PPO)
+6. Deep Deterministic Policy Gradient (DDPG)
+7. Twin Delayed DDPG (TD3)
+8. Soft Actor-Critic (SAC)
+9. Behavioral Cloning (BC)
+10. DAgger 算法
+11. Generative Adversarial Imitation Learning (GAIL)
+12. Deep Q-learning from Demonstrations (DQfD)
+13. Rainbow DQN
+14. World Models

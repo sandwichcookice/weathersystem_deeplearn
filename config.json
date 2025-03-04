@@ -88,10 +88,10 @@
   },
   "training": {
     "learning_rate": 0.001,
-    "batch_size": 258,
-    "num_epochs": 10000,
+    "batch_size": 1024,
+    "num_epochs": 30,
     "gamma": 0.99,
-    "learning_starts": 2000,
+    "learning_starts": 5,
     "replay_buffer_size": 50000,
     "exploration_config": {
       "epsilon_timesteps": 10000,
