@@ -55,7 +55,15 @@ def load_json_file(filepath):
 def load_json_files(directory):
     files = [os.path.join(directory, fname) for fname in os.listdir(directory) 
              if fname.endswith(".json") and not fname.startswith("._")]
-    return [load_json_file(f) for f in files]
+    regions = []
+    for f in files:
+        region = load_json_file(f)
+        if "station_id" not in region:
+            # 如果 JSON 裡沒有 "station_id"，則以檔案名稱作為 station_id
+            region["station_id"] = os.path.basename(f)
+        regions.append(region)
+    return regions
+
 
 class SelfAttention(nn.Module):
     def __init__(self, d_model):
@@ -164,3 +172,34 @@ class WeatherDQNModel(nn.Module):
         shared = F.relu(self.fc2(shared))
         q_vals = self.q_out(shared)
         return q_vals
+    
+class WeatherActorCriticModel(nn.Module):
+    def __init__(self):
+        super(WeatherActorCriticModel, self).__init__()
+        # 兩層 Bi-LSTM 前端特徵提取 (輸入維度固定為7)
+        self.lstm1 = nn.LSTM(input_size=7, hidden_size=64, batch_first=True, bidirectional=True)
+        self.lstm2 = nn.LSTM(input_size=128, hidden_size=64, batch_first=True, bidirectional=True)
+        # 共享全連接層
+        self.fc1 = nn.Linear(128, 128)
+        self.fc2 = nn.Linear(128, 128)
+        # Actor 分支：輸出 11 個動作（各動作輸出一個機率，使用 sigmoid 激活）
+        self.actor = nn.Linear(128, 11)
+        # Critic 分支：輸出單一標量，作為狀態價值估計
+        self.critic = nn.Linear(128, 1)
+    
+    def forward(self, x, time_weight):
+        """
+        x: Tensor, shape (B, 24, 7) － 輸入天氣數據
+        time_weight: Tensor, shape (B, 24) － 固定時間權重（不參與反向傳播）
+        """
+        lstm1_out, _ = self.lstm1(x)  # (B, 24, 128)
+        fixed_weight = time_weight.detach().unsqueeze(-1)  # (B, 24, 1)
+        attn1_out = lstm1_out * fixed_weight               # (B, 24, 128)
+        lstm2_out, _ = self.lstm2(attn1_out)               # (B, 24, 128)
+        pooled = torch.mean(lstm2_out, dim=1)              # (B, 128)
+        shared = F.relu(self.fc1(pooled))
+        shared = F.relu(self.fc2(shared))
+        policy_logits = self.actor(shared)               # (B, 11)
+        policy_probs = torch.sigmoid(policy_logits)      # 每個數值介於 0 與 1
+        value = self.critic(shared)                      # (B, 1)
+        return policy_probs, value

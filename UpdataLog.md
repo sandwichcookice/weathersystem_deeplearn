@@ -37,12 +37,11 @@
 ## [v.0.6.0]
 ### (Purpose)
 - 清洗過去六年的資料相關
-### (Updata)
+### (Update)
 - 資料清洗和整理腳本的全面換新，目前最終清洗是採用C++來處理，編譯後的執行檔被放在bin
 - Json檔案打包壓縮腳本，由C++編寫，編譯後的執行檔被放在bin
 - C++腳本所需要的標頭檔案都存放在scripts/Chead中 目前有兩個，一個是JSON解析標頭 一個是miniz(zip)函式庫
 - UnZip現在由C++來編寫，編譯後的執行檔被放在bin
-### (Change)
 - scripts 資料夾因為新增了C++的原因 架構重新編排，scripts的第一層子級是對應的語言名稱資料夾，他們的子級才會是各種功能腳本
 - 將這個版本之前所用到的資料都轉移存放在Old_Data裡面，還留存的原因是架構保存，為防止之後有需要
 - data資料夾將被永久遺忘 因為資料量的增加，導致無法上傳至github，所以由其他載體進行轉移
@@ -71,3 +70,18 @@
 12. Deep Q-learning from Demonstrations (DQfD)
 13. Rainbow DQN
 14. World Models
+
+## [v.0.8.0]
+### (Update)
+- v.0.6.0 的 Change 被修正為 Update , Updata 被修正為 Update 此處為打字錯誤
+- trainscripts 的名稱從 trainscipts 更正為 trainscripts 此處為打字錯誤
+- Double DQN 的訓練腳本
+### (important)
+- 在這個版本中 我們修該了原本的目標 所以原本的強化訓練腳本變成了專注於離散動作範圍的強化訓練腳本--DQN以及其衍生版
+- 其餘未被採納，但是已被寫完的腳本將會被放在trainscripts/savescripts中
+- 已經被訓練完的模型，但是未被採納的，將會被存放在./savemodel中
+1. ~~DQN~~
+1. ~~Double DQN~~
+2. ~~Dueling DQN~~
+4. Categorical DQN (C51)
+5. Rainbow DQN

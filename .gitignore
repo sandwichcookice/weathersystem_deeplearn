@@ -8,3 +8,4 @@ weathersystem_deeplearn.code-workspace
 logs
 model
 error_log.txt
+savemodel
