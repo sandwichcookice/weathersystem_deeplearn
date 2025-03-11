@@ -83,5 +83,16 @@
 1. ~~DQN~~
 1. ~~Double DQN~~
 2. ~~Dueling DQN~~
-4. Categorical DQN (C51)
+4. ~~Categorical DQN (C51)~~
 5. Rainbow DQN
+
+## [v.0.9.0]
+### (Update)
+- 全部的模型訓練腳本都被處理完畢
+### (important)
+- 在這個版本中 因為rainbow dqn的超參數問題始終無法被處理，導致我們只能被迫放棄他，轉而研究基於ddqn與duelingdqn衍伸的D3QN
+1. ~~DQN~~
+1. ~~Double DQN~~
+2. ~~Dueling DQN~~
+4. ~~Categorical DQN (C51)~~
+5. ~~D3QN~~

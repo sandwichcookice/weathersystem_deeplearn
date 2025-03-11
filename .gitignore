@@ -9,3 +9,4 @@ logs
 model
 error_log.txt
 savemodel
+.pytest_cache

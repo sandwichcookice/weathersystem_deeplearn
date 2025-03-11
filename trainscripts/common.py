@@ -203,3 +203,83 @@ class WeatherActorCriticModel(nn.Module):
         policy_probs = torch.sigmoid(policy_logits)      # 每個數值介於 0 與 1
         value = self.critic(shared)                      # (B, 1)
         return policy_probs, value
+    
+class WeatherD3QNModel(nn.Module):
+    def __init__(self):
+        super(WeatherD3QNModel, self).__init__()
+        # ------------------------------------------------
+        # 跟 WeatherDQNModel 一樣的前置層：兩層 Bi-LSTM + Attention
+        # ------------------------------------------------
+        self.lstm1 = nn.LSTM(input_size=7, hidden_size=64, batch_first=True, bidirectional=True)
+        self.lstm2 = nn.LSTM(input_size=128, hidden_size=64, batch_first=True, bidirectional=True)
+        self.attention = SelfAttention(128)
+
+        self.fc1 = nn.Linear(128, 128)
+        self.fc2 = nn.Linear(128, 128)
+
+        # ------------------------------------------------
+        # Dueling 分支：Value Stream 與 Advantage Stream
+        # ------------------------------------------------
+        # Advantage 分支：對應 11 個決策，每個決策 2 個動作 => 11*2=22 輸出
+        self.adv_fc = nn.Linear(128, 128)
+        self.adv_out = nn.Linear(128, 22)  # shape: (batch, 22) => reshape成 (batch, 11, 2)
+
+        # Value 分支：對應 11 個決策，每個決策 1 個 Value => 11
+        self.val_fc = nn.Linear(128, 128)
+        self.val_out = nn.Linear(128, 11)  # shape: (batch, 11) => reshape成 (batch, 11,1)
+
+    def forward(self, x, time_weight):
+        """
+        x: (B,24,7) － 天氣資料
+        time_weight: (B,24) － time_weight
+        輸出 shape: (B,22) － Q 值 (11 個決策，每個決策 2 個動作)
+        """
+
+        # ---------------------------
+        # 1. LSTM1 + 時間權重乘法
+        # ---------------------------
+        lstm1_out, _ = self.lstm1(x)  # (B,24,128)
+        fixed_weight = time_weight.detach().unsqueeze(-1)  # (B,24,1)
+        attn1_out = lstm1_out * fixed_weight               # (B,24,128)
+
+        # ---------------------------
+        # 2. LSTM2 + Attention
+        # ---------------------------
+        lstm2_out, _ = self.lstm2(attn1_out)  # (B,24,128)
+
+        # 使用自注意力模組
+        # SelfAttention(128) 通常輸入 shape=(B,24,128)，回傳同維度 (B,24,128)
+        attn_out = self.attention(lstm2_out)
+
+        # 接著做 mean pool (你也可以試其他池化方式)
+        pooled = torch.mean(attn_out, dim=1)  # (B,128)
+
+        # ---------------------------
+        # 3. 共享全連接層
+        # ---------------------------
+        shared = F.relu(self.fc1(pooled))
+        shared = F.relu(self.fc2(shared))
+
+        # ---------------------------
+        # 4. Dueling: 分成 Advantage + Value
+        # ---------------------------
+        # (A) Advantage 分支
+        adv = F.relu(self.adv_fc(shared))   # (B,128)
+        adv = self.adv_out(adv)            # (B, 22) => reshape (B,11,2)
+
+        # (B) Value 分支
+        val = F.relu(self.val_fc(shared))   # (B,128)
+        val = self.val_out(val)            # (B, 11) => reshape (B,11,1)
+
+        # 轉成 3 維形狀，好計算 dueling 架構
+        adv = adv.view(-1, 11, 2)   # (B,11,2)
+        val = val.unsqueeze(-1)     # (B,11,1)
+
+        # Advantage 平均 => (B,11,1)
+        adv_mean = adv.mean(dim=2, keepdim=True)
+        # Q(s,a) = V(s) + A(s,a) - mean(A(s,a))
+        q = val + (adv - adv_mean)  # shape (B,11,2)
+
+        # 最終輸出攤平 => (B, 22)
+        q = q.view(-1, 22)
+        return q
