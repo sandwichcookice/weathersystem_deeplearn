@@ -96,3 +96,8 @@
 2. ~~Dueling DQN~~
 4. ~~Categorical DQN (C51)~~
 5. ~~D3QN~~
+
+## [v.0.10.0]
+### (Update)
+- 模型比較完畢，將比較後的檔案放置於analyze裡面
+- 生成了推理腳本
