@@ -2,11 +2,9 @@ __pycache__
 .vscode
 pyenv
 weathersystem_deeplearn.code-workspace
-/data
 **/._*
 .venv
-logs
-model
 error_log.txt
-savemodel
 .pytest_cache
+ignore
+main

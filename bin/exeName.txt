@@ -1,8 +1,0 @@
-方便複製用
-
-g++ -std=c++17 -O3 -march=native -o 
-
-HistoryData_final_cleaner
-g++ -std=c++17 -O3 -march=native -o HistoryData_final_cleaner HistoryData_final_cleaner.cpp
-./bin/HistoryData_final_cleaner
-./HistoryData_final_cleaner

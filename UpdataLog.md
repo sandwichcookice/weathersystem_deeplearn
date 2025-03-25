@@ -101,3 +101,12 @@
 ### (Update)
 - 模型比較完畢，將比較後的檔案放置於analyze裡面
 - 生成了推理腳本
+
+## [v.1.0.0]
+### (Update)
+- 將不相關資料移動至ignore資料夾
+- test.py 被變更成 gputest.py ，這樣更準確地描述了腳本的功用
+- 源代碼部分轉移到src , src內部包含了可用函數(Scripts) , 訓練腳本(trainScripts)
+- 檔案部分打包到了dist , 測試用data , config 和模型(dueling_dqn)
+- 執行檔發佈在Releases
+- Requirements 現在分成兩部分，Mac/win , 目前Mac以完善 Win等下一版本更新
