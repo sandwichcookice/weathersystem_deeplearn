@@ -99,9 +99,9 @@ def generate_time_weights(batch_size, seq_len, device="cpu", low=0.5, high=1.5):
 
 def main():
     parser = argparse.ArgumentParser(description="Dueling DQN 推理腳本 (適配 testinput.json)")
-    parser.add_argument("--config", type=str, default="./config.json", help="配置文件路徑")
-    parser.add_argument("--model_path", type=str, default="model/time1/dueling_dqn/leatest.pth", help="模型檢查點路徑")
-    parser.add_argument("--input_file", type=str, default="data/testinput.json", help="推理輸入文件路徑")
+    parser.add_argument("--config", type=str, default="../../dist/model/config.json", help="配置文件路徑")
+    parser.add_argument("--model_path", type=str, default="../../dist/model/model.pth", help="模型檢查點路徑")
+    parser.add_argument("--input_file", type=str, default="../../dist/test/test_input.json", help="推理輸入文件路徑")
     args = parser.parse_args()
 
     # 載入配置文件

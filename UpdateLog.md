@@ -110,3 +110,9 @@
 - 檔案部分打包到了dist , 測試用data , config 和模型(dueling_dqn)
 - 執行檔發佈在Releases
 - Requirements 現在分成兩部分，Mac/win , 目前Mac以完善 Win等下一版本更新
+
+## [v.1.0.1]
+### (Update)
+- 更改requirements Ｍac的名稱 
+- 修正UpdateLog 的名稱 , 原名稱為 UpdataLog
+- 更新推理腳本的參數
